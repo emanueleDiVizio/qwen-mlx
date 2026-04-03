@@ -56,7 +56,7 @@ src/
     executor.rs      — ModelExecutor trait (decouples scheduling from model)
     mlx_executor.rs  — Real MLX executor with batched B>1 forward
   bin/
-    mlx_qwen_infer.rs   — Single-user inference CLI
+    qwen_mlx_infer.rs   — Single-user inference CLI
     multi_user_bench.rs  — Multi-user concurrent benchmark
     scheduler_demo.rs    — Scheduler demo with mock executor
 ```
@@ -90,16 +90,46 @@ src/
 ### Single-user inference
 
 ```bash
-cargo build --release --bin mlx_qwen_infer
-./target/release/mlx_qwen_infer \
+cargo build --release --bin qwen_mlx_infer
+
+# Download from Hugging Face (recommended)
+./target/release/qwen_mlx_infer \
+  --model-id mlx-community/Qwen3.5-35B-A3B-4bit \
+  --prompt "What is quantum computing?"
+
+# Or use a local model directory
+./target/release/qwen_mlx_infer \
   --model-dir /path/to/Qwen3.5-35B-A3B-4bit \
   --prompt "What is quantum computing?"
 ```
+
+For gated models, specify a token source:
+```bash
+./target/release/qwen_mlx_infer \
+  --model-id Qwen/Qwen3.5-35B-A3B \
+  --token-source cache \
+  --prompt "Hello"
+```
+
+Token source options:
+- `none` — No token (default, works for public models)
+- `cache` — Read from `~/.cache/huggingface/token`
+- `env:VAR_NAME` — Read from environment variable
+- `literal:TOKEN` — Use literal token value
 
 ### Multi-user benchmark
 
 ```bash
 cargo build --release --bin multi_user_bench
+
+# Download from Hugging Face
+./target/release/multi_user_bench \
+  --model-id mlx-community/Qwen3.5-35B-A3B-4bit \
+  --users 4 \
+  --tokens-per-user 200 \
+  --batch 4
+
+# Or use a local model directory
 ./target/release/multi_user_bench \
   --model-dir /path/to/Qwen3.5-35B-A3B-4bit \
   --users 4 \

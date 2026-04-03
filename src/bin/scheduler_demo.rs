@@ -4,7 +4,7 @@
 //! per-token interleaved generation with fairness.
 
 use std::time::Instant;
-use mlx_qwen::scheduler::*;
+use qwen_mlx::scheduler::*;
 
 /// Mock executor for demo purposes.
 /// In production, this wraps the actual Qwen3.5 model with batched forward.

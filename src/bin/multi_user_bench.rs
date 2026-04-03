@@ -1,22 +1,42 @@
 //! Benchmark: multi-user concurrent inference with real model.
 //!
-//! Usage: multi_user_bench --model-dir <path> --users N [--tokens-per-user M]
+//! Usage:
+//!   multi_user_bench --model-dir <path> --users N [--tokens-per-user M]
+//!   multi_user_bench --model-id <hf_model_id> [--token-source <source>] --users N [--tokens-per-user M]
 
 use std::path::PathBuf;
 use std::time::Instant;
 
-use mlx_qwen::scheduler::*;
-use mlx_qwen::scheduler::mlx_executor::Qwen35Executor;
+use qwen_mlx::hf::{download_model, TokenSource};
+use qwen_mlx::scheduler::*;
+use qwen_mlx::scheduler::mlx_executor::Qwen35Executor;
 
 fn main() {
+    tracing_subscriber::fmt::init();
+
     let args: Vec<String> = std::env::args().collect();
-    let model_dir = args.iter().position(|a| a == "--model-dir")
-        .and_then(|i| args.get(i + 1))
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            eprintln!("Usage: multi_user_bench --model-dir <path> --users N [--tokens-per-user M]");
-            std::process::exit(1);
-        });
+
+    let model_dir_arg = args.iter().position(|a| a == "--model-dir")
+        .and_then(|i| args.get(i + 1).map(|s| s.as_str()));
+    let model_id_arg = args.iter().position(|a| a == "--model-id")
+        .and_then(|i| args.get(i + 1).map(|s| s.as_str()));
+    let token_source_arg = args.iter().position(|a| a == "--token-source")
+        .and_then(|i| args.get(i + 1).map(|s| s.as_str()))
+        .unwrap_or("none");
+
+    let model_dir = if let Some(dir) = model_dir_arg {
+        PathBuf::from(dir)
+    } else if let Some(model_id) = model_id_arg {
+        let token_source = TokenSource::parse(token_source_arg)
+            .expect("Invalid token source format");
+        download_model(model_id, token_source, None)
+            .expect("Failed to download model from Hugging Face")
+    } else {
+        eprintln!("Usage:");
+        eprintln!("  multi_user_bench --model-dir <path> --users N [--tokens-per-user M]");
+        eprintln!("  multi_user_bench --model-id <hf_model_id> [--token-source <source>] --users N");
+        std::process::exit(1);
+    };
     let num_users: usize = args.iter().position(|a| a == "--users")
         .and_then(|i| args.get(i + 1))
         .and_then(|s| s.parse().ok())
