@@ -146,6 +146,10 @@ cargo build --release --bin multi_user_bench
 
 The 4-bit quantized model requires ~19GB of memory. The M3 Ultra 96GB can comfortably run 8+ concurrent users.
 
+## Known Issues
+
+**M4 chips (Metal 4)**: MLX has compatibility issues with the M4 GPU architecture. Inference may be extremely slow (~0.1 tok/s vs 100+ tok/s on M3) or hang. This is an upstream MLX issue. For M4 Macs, consider using llama.cpp with GGUF quantized models instead.
+
 ## The GDN serving advantage
 
 Traditional LLM serving systems (vLLM, TGI, SGLang) are built around managing the transformer KV cache — PagedAttention, prefix caching, memory fragmentation, cache eviction policies. This is necessary because the KV cache grows linearly with sequence length and dominates GPU memory.

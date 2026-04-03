@@ -72,15 +72,34 @@ fn main() {
         model.config.linear_num_key_heads, model.config.linear_num_value_heads,
         model.config.linear_key_head_dim, model.config.linear_value_head_dim);
 
+    // Warmup pass to trigger shader compilation
+    println!("Warmup...");
+    let t_warmup = Instant::now();
+    {
+        let warmup_input = mlx_rs::Array::from_slice(&[1i32], &[1, 1]);
+        let mut warmup_cache: Vec<(Option<mlx_rs::Array>, Option<mlx_rs::Array>)> = Vec::new();
+        let warmup_logits = model.forward(&warmup_input, &mut warmup_cache).expect("Warmup failed");
+        warmup_logits.eval().expect("Warmup eval failed");
+    }
+    // Clear MLX cache between warmup and inference
+    unsafe { mlx_sys::mlx_clear_cache(); }
+    println!("Warmup complete in {:.1}s", t_warmup.elapsed().as_secs_f32());
+
     // Load tokenizer
     let tokenizer = tokenizers::Tokenizer::from_file(model_dir.join("tokenizer.json"))
         .expect("Failed to load tokenizer");
 
-    // Wrap in Qwen chat template
-    let chat_prompt = format!(
-        "<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n",
-        prompt
-    );
+    // Check for --raw flag to skip chat template
+    let use_raw = args.iter().any(|a| a == "--raw");
+
+    let chat_prompt = if use_raw {
+        prompt.to_string()
+    } else {
+        format!(
+            "<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n",
+            prompt
+        )
+    };
     println!("Prompt: {}", prompt);
 
     // Encode prompt (no special token addition — template has them)
