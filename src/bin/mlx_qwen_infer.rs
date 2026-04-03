@@ -1,26 +1,65 @@
 //! MLX inference binary for Qwen3.5-35B-A3B on Apple Silicon.
 //!
-//! Usage: mlx_qwen_infer --model-dir <path> [--prompt "text"]
+//! Usage:
+//!   qwen_mlx_infer --model-dir <path> [--prompt "text"]
+//!   qwen_mlx_infer --model-id <hf_model_id> [--token-source <source>] [--revision <rev>] [--prompt "text"]
+//!
+//! Token source formats (only needed for gated models):
+//!   - "none" (default): No token (works for public models)
+//!   - "cache": Read from ~/.cache/huggingface/token
+//!   - "env:VAR_NAME": Read from environment variable
+//!   - "literal:TOKEN": Use literal token value
 
 use std::io::Write;
 use std::path::PathBuf;
 use std::time::Instant;
 
 use mlx_rs::ops::indexing::IndexOp;
-use mlx_qwen::models::qwen3_5;
+use qwen_mlx::hf::{download_model, TokenSource};
+use qwen_mlx::models::qwen3_5;
 
 fn main() {
+    // Initialize tracing for download progress
+    tracing_subscriber::fmt::init();
+
     let args: Vec<String> = std::env::args().collect();
-    let model_dir = args.iter().position(|a| a == "--model-dir")
-        .and_then(|i| args.get(i + 1))
-        .unwrap_or_else(|| {
-            std::process::exit(1);
-        });
+
+    // Parse arguments
+    let model_dir_arg = args.iter().position(|a| a == "--model-dir")
+        .and_then(|i| args.get(i + 1).map(|s| s.as_str()));
+    let model_id_arg = args.iter().position(|a| a == "--model-id")
+        .and_then(|i| args.get(i + 1).map(|s| s.as_str()));
+    let token_source_arg = args.iter().position(|a| a == "--token-source")
+        .and_then(|i| args.get(i + 1).map(|s| s.as_str()))
+        .unwrap_or("none");
+    let revision_arg = args.iter().position(|a| a == "--revision")
+        .and_then(|i| args.get(i + 1).map(|s| s.as_str()));
     let prompt = args.iter().position(|a| a == "--prompt")
         .and_then(|i| args.get(i + 1).map(|s| s.as_str()))
         .unwrap_or("Hello! How are you today?");
 
-    let model_dir = PathBuf::from(model_dir);
+    // Determine model directory: --model-dir takes precedence, otherwise download from HF
+    let model_dir = if let Some(dir) = model_dir_arg {
+        PathBuf::from(dir)
+    } else if let Some(model_id) = model_id_arg {
+        let token_source = TokenSource::parse(token_source_arg)
+            .expect("Invalid token source format");
+        download_model(model_id, token_source, revision_arg)
+            .expect("Failed to download model from Hugging Face")
+    } else {
+        eprintln!("Error: Either --model-dir or --model-id must be provided");
+        eprintln!();
+        eprintln!("Usage:");
+        eprintln!("  qwen_mlx_infer --model-dir <path> [--prompt \"text\"]");
+        eprintln!("  qwen_mlx_infer --model-id <hf_model_id> [--token-source <source>] [--revision <rev>] [--prompt \"text\"]");
+        eprintln!();
+        eprintln!("Token source formats (only needed for gated models):");
+        eprintln!("  none          No token, for public models (default)");
+        eprintln!("  cache         Read from ~/.cache/huggingface/token");
+        eprintln!("  env:VAR_NAME  Read from environment variable");
+        eprintln!("  literal:TOKEN Use literal token value");
+        std::process::exit(1);
+    };
 
     println!("Loading model from {:?}...", model_dir);
     let t0 = Instant::now();
@@ -91,7 +130,7 @@ fn main() {
     };
 
     // Build step: forward + sample
-    let do_step = |token: &mlx_rs::Array, model: &mut mlx_qwen::models::qwen3_5::Qwen35Model,
+    let do_step = |token: &mlx_rs::Array, model: &mut qwen_mlx::models::qwen3_5::Qwen35Model,
                    caches: &mut Vec<(Option<mlx_rs::Array>, Option<mlx_rs::Array>)>,
                    inv_temp: &mlx_rs::Array| -> mlx_rs::Array {
         let logits = model.forward(token, caches).expect("Decode failed");
