@@ -18,3 +18,7 @@ tokenizers = "0.21"
 half = "2"
 tokio = { version = "1", features = ["sync", "macros", "rt-multi-thread"] }
 hf-hub = { version = "0.4", default-features = false, features = ["ureq", "tokio", "rustls-tls"] }
+axum = "0.8"
+futures = "0.3"
+uuid = { version = "1", features = ["v4"] }
+async-stream = "0.3"

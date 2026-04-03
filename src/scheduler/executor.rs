@@ -20,22 +20,29 @@ pub struct BatchOutput {
 /// The scheduler calls these methods and handles sequencing/fairness.
 pub trait ModelExecutor {
     /// Prefill a single sequence: process its prompt and initialize model state.
-    ///
-    /// After prefill:
-    /// - `seq.state` is populated with layer states
-    /// - `seq.current_token` is set to the first generated token
-    /// - `seq.status` transitions to `Decoding`
-    ///
-    /// Returns the first generated token.
     fn prefill(&mut self, seq: &mut Sequence) -> Result<u32, Box<dyn std::error::Error>>;
 
     /// Generate exactly one token for each sequence in the batch.
-    ///
-    /// All sequences must be in `Decoding` status.
-    /// Each sequence's `current_token` is used as input, and its `state` is updated.
-    ///
-    /// For B sequences, this issues ONE batched forward pass (B tokens in parallel).
     fn decode_batch(&mut self, sequences: &mut [&mut Sequence]) -> Result<BatchOutput, Box<dyn std::error::Error>>;
+
+    /// Build graph + async eval for batch, but DON'T wait for results.
+    /// Call `collect_batch()` later to get the tokens.
+    /// Returns the number of sequences submitted.
+    fn submit_batch(&mut self, sequences: &mut [&mut Sequence]) -> Result<usize, Box<dyn std::error::Error>> {
+        // Default: just call decode_batch (no pipelining)
+        let _ = sequences;
+        Err("submit_batch not implemented".into())
+    }
+
+    /// Collect results from a previous `submit_batch()`.
+    /// Blocks until GPU finishes.
+    fn collect_batch(&mut self, sequences: &mut [&mut Sequence]) -> Result<BatchOutput, Box<dyn std::error::Error>> {
+        let _ = sequences;
+        Err("collect_batch not implemented".into())
+    }
+
+    /// Whether this executor supports submit/collect pipelining.
+    fn supports_pipeline(&self) -> bool { false }
 
     /// Maximum batch size the executor supports.
     fn max_batch_size(&self) -> usize;

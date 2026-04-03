@@ -25,6 +25,8 @@ pub struct Qwen35Executor {
     model: Qwen35Model,
     inv_temp: Array,
     num_layers: usize,
+    /// Pending token arrays from submit_batch (collected by collect_batch)
+    pending_tokens: Vec<Array>,
 }
 
 impl Qwen35Executor {
@@ -32,7 +34,7 @@ impl Qwen35Executor {
         let model = qwen3_5::load_model(model_dir)?;
         let num_layers = model.config.num_hidden_layers as usize;
         let inv_temp = Array::from_slice(&[1.0 / temperature], &[1]);
-        Ok(Self { model, inv_temp, num_layers })
+        Ok(Self { model, inv_temp, num_layers, pending_tokens: Vec::new() })
     }
 
     /// Stack optional arrays, padding any variable-length dimensions to max.
@@ -150,19 +152,15 @@ impl ModelExecutor for Qwen35Executor {
         let b = sequences.len();
 
         if b == 1 {
-            // Fast path: single sequence, no stacking overhead
             let seq = &mut sequences[0];
             let state = seq.state.as_mut().unwrap().downcast_mut::<Qwen35State>().unwrap();
-
             let input = Array::from_slice(&[seq.current_token as i32], &[1, 1]);
             let logits = self.model.forward(&input, &mut state.caches)?;
             let last = logits.reshape(&[1, -1])?;
             let scaled = last.multiply(self.inv_temp.clone())?;
             let token_arr = mlx_rs::random::categorical(&scaled, -1, None, None)?;
             token_arr.eval()?;
-            let token: u32 = token_arr.item();
-
-            return Ok(BatchOutput { tokens: vec![token] });
+            return Ok(BatchOutput { tokens: vec![token_arr.item()] });
         }
 
         // True batched path: stack states → single forward → unstack
@@ -192,6 +190,67 @@ impl ModelExecutor for Qwen35Executor {
         self.unstack_caches(sequences, batched_caches);
 
         Ok(BatchOutput { tokens: result_tokens })
+    }
+
+    fn supports_pipeline(&self) -> bool { true }
+
+    fn submit_batch(&mut self, sequences: &mut [&mut Sequence]) -> Result<usize, Box<dyn std::error::Error>> {
+        let b = sequences.len();
+
+        // Build graph and kick async eval (don't wait)
+        if b == 1 {
+            let seq = &mut sequences[0];
+            let state = seq.state.as_mut().unwrap().downcast_mut::<Qwen35State>().unwrap();
+            let input = Array::from_slice(&[seq.current_token as i32], &[1, 1]);
+            let logits = self.model.forward(&input, &mut state.caches)?;
+            let last = logits.reshape(&[1, -1])?;
+            let scaled = last.multiply(self.inv_temp.clone())?;
+            let token_arr = mlx_rs::random::categorical(&scaled, -1, None, None)?;
+
+            unsafe {
+                let v = mlx_sys::mlx_vector_array_new();
+                mlx_sys::mlx_vector_array_append_value(v, token_arr.as_ptr());
+                mlx_sys::mlx_async_eval(v);
+                mlx_sys::mlx_vector_array_free(v);
+            }
+            self.pending_tokens = vec![token_arr];
+        } else {
+            let tokens: Vec<i32> = sequences.iter().map(|s| s.current_token as i32).collect();
+            let input = Array::from_slice(&tokens, &[b as i32, 1]);
+            let mut batched_caches = self.stack_caches(sequences);
+            let logits = self.model.forward(&input, &mut batched_caches)?;
+            let logits_flat = logits.reshape(&[b as i32, -1])?;
+            let scaled = logits_flat.multiply(self.inv_temp.clone())?;
+            let token_arr = mlx_rs::random::categorical(&scaled, -1, None, None)?;
+
+            unsafe {
+                let v = mlx_sys::mlx_vector_array_new();
+                mlx_sys::mlx_vector_array_append_value(v, token_arr.as_ptr());
+                mlx_sys::mlx_async_eval(v);
+                mlx_sys::mlx_vector_array_free(v);
+            }
+            self.pending_tokens = vec![token_arr];
+            // Store batched caches for unstack in collect
+            // For now, unstack immediately (TODO: defer)
+            self.unstack_caches(sequences, batched_caches);
+        }
+        Ok(b)
+    }
+
+    fn collect_batch(&mut self, sequences: &mut [&mut Sequence]) -> Result<BatchOutput, Box<dyn std::error::Error>> {
+        let b = sequences.len();
+        let token_arr = self.pending_tokens.pop().unwrap();
+
+        if b == 1 {
+            let token: u32 = token_arr.item();
+            Ok(BatchOutput { tokens: vec![token] })
+        } else {
+            let tokens: Vec<u32> = (0..b).map(|i| {
+                let t = token_arr.index(i as i32);
+                t.item()
+            }).collect();
+            Ok(BatchOutput { tokens })
+        }
     }
 
     fn max_batch_size(&self) -> usize { 16 }

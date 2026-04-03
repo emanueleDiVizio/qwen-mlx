@@ -173,6 +173,51 @@ impl TokenScheduler {
         Ok(tokens_emitted)
     }
 
+    /// Take N sequences from the active queue (for external pipeline).
+    pub fn take_batch(&mut self, n: usize) -> Vec<Sequence> {
+        self.active.drain(..n.min(self.active.len())).collect()
+    }
+
+    /// Return a sequence to the active queue (after external processing).
+    pub fn return_to_active(&mut self, seq: Sequence) {
+        self.active.push_back(seq);
+    }
+
+    /// Number of active sequences.
+    pub fn active_count(&self) -> usize {
+        self.active.len()
+    }
+
+    /// Run prefill for waiting sequences (exposed for external pipeline loop).
+    pub fn prefill_waiting(&mut self, executor: &mut dyn ModelExecutor) {
+        let prefill_count = self.prefill_budget.min(self.waiting.len());
+        for _ in 0..prefill_count {
+            if let Some(mut seq) = self.waiting.pop_front() {
+                seq.status = SequenceStatus::Prefilling;
+                match executor.prefill(&mut seq) {
+                    Ok(first_token) => {
+                        seq.status = SequenceStatus::Decoding;
+                        seq.current_token = first_token;
+                        seq.first_token_at = Some(Instant::now());
+                        seq.tokens_generated = 1;
+                        seq.emit_token(first_token);
+                        if seq.should_stop(first_token) {
+                            seq.status = SequenceStatus::Finished;
+                            seq.emit_finished(FinishReason::Eos);
+                        } else {
+                            self.active.push_back(seq);
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!("Prefill failed for {:?}: {}", seq.id, e);
+                        seq.emit_finished(FinishReason::Error);
+                    }
+                }
+            }
+        }
+        self.update_stats();
+    }
+
     /// Check if there's any work to do.
     pub fn has_work(&self) -> bool {
         !self.waiting.is_empty() || !self.active.is_empty()
